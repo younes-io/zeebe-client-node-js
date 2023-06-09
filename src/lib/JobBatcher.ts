@@ -1,68 +1,62 @@
-import { ZBBatchWorker } from '../zb/ZBBatchWorker'
+import { ZBBatchWorker } from '../zb/ZBBatchWorker';
 import {
-	BatchedJob,
-	ICustomHeaders,
-	IInputVariables,
-	IOutputVariables,
-	ZBBatchWorkerTaskHandler,
-} from './interfaces-1.0'
-import { Queue } from './Queue'
+  BatchedJob,
+  ICustomHeaders,
+  IInputVariables,
+  IOutputVariables,
+  ZBBatchWorkerTaskHandler,
+} from './interfaces-1.0';
+import { Queue } from './Queue';
+
+interface ErrorReportingFunction {
+  (message: string, error?: any): void;
+}
+
+export interface IJobBatcherOptions {
+  handler: ZBBatchWorkerTaskHandler<IInputVariables, ICustomHeaders, IOutputVariables>;
+  timeout: number;
+  batchSize: number;
+  worker: ZBBatchWorker<IInputVariables, ICustomHeaders, IOutputVariables>;
+}
 
 export class JobBatcher {
-	private batchedJobs: Queue<BatchedJob> = new Queue()
-	private handler: ZBBatchWorkerTaskHandler<any, any, any>
-	private timeout: number
-	private batchSize: number
-	private worker: ZBBatchWorker<any, any, any>
-	private batchExecutionTimerHandle: any
-	constructor({
-		handler,
-		timeout,
-		batchSize,
-		worker,
-	}: {
-		handler: ZBBatchWorkerTaskHandler<any, any, any>
-		timeout: number
-		batchSize: number
-		worker: ZBBatchWorker<any, any, any>
-	}) {
-		this.handler = handler
-		this.timeout = timeout
-		this.batchSize = batchSize
-		this.worker = worker
-	}
+  private batchedJobs: Queue<BatchedJob<IInputVariables, ICustomHeaders, IOutputVariables>> = new Queue();
+  private handler: ZBBatchWorkerTaskHandler<IInputVariables, ICustomHeaders, IOutputVariables>;
+  private timeout: number;
+  private batchSize: number;
+  private worker: ZBBatchWorker<IInputVariables, ICustomHeaders, IOutputVariables>;
+  private batchExecutionTimerHandle: NodeJS.Timeout | undefined;
 
-	public batch(
-		batch: Array<
-			BatchedJob<IInputVariables, ICustomHeaders, IOutputVariables>
-		>
-	) {
-		if (!this.batchExecutionTimerHandle) {
-			this.batchExecutionTimerHandle = setTimeout(
-				() => this.execute(),
-				this.timeout * 1000
-			)
-		}
-		batch.forEach(this.batchedJobs.push)
-		if (this.batchedJobs.length() >= this.batchSize) {
-			clearTimeout(this.batchExecutionTimerHandle)
-			this.execute()
-		}
-	}
+  constructor(options: IJobBatcherOptions) {
+    this.handler = options.handler;
+    this.timeout = options.timeout * 1000; // Convert timeout to milliseconds
+    this.batchSize = options.batchSize;
+    this.worker = options.worker;
+  }
 
-	private execute() {
-		this.batchExecutionTimerHandle = undefined
-		this.worker.debug(
-			`Executing batched handler with ${this.batchedJobs.length()} jobs`
-		)
-		try {
-			this.handler(this.batchedJobs.drain(), this.worker)
-		} catch (e: any) {
-			this.worker.error(
-				`An unhandled exception occurred in the worker task handler!`
-			)
-			this.worker.error(e.message)
-			this.worker.error(e)
-		}
-	}
+  public batch(batch: BatchedJob<IInputVariables, ICustomHeaders, IOutputVariables>[]) {
+    if (!this.batchExecutionTimerHandle) {
+      this.batchExecutionTimerHandle = setTimeout(() => this.execute(), this.timeout);
+    }
+    batch.forEach(this.batchedJobs.push);
+    if (this.batchedJobs.length() >= this.batchSize) {
+      clearTimeout(this.batchExecutionTimerHandle);
+      this.execute();
+    }
+  }
+
+  private execute() {
+    this.batchExecutionTimerHandle = undefined;
+    this.worker.debug(`Executing batched handler with ${this.batchedJobs.length()} jobs`);
+    try {
+      this.handler(this.batchedJobs.drain(), this.worker);
+    } catch (e: any) {
+      this.reportError('An unhandled exception occurred in the worker task handler!', e);
+    }
+  }
+
+  private reportError(message: string, error?: any) {
+    const errorReportingFunction: ErrorReportingFunction = this.worker.error ?? console.error;
+    errorReportingFunction(message, error);
+  }
 }
